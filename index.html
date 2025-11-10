@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Study Warden</title>
+    <!-- pulling in Tailwind CSS so everything looks nice without writing a ton of CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* makes the status dot pulse gently so you know it's alive */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.2; }
+        }
+        .animate-pulse-fast {
+            animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        /* special styling for when the device is armed */
+        .btn-armed { background-color: #22c55e; color: white; cursor: not-allowed; opacity: 0.7; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans flex items-center justify-center min-h-screen py-12">
+
+    <!-- this is the main container that holds everything -->
+    <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-4xl text-center">
+        
+        <h1 class="text-4xl font-bold mb-6">AI Study Warden</h1>
+
+        <div class="flex justify-center gap-4">
+            <button id="toggle-settings" class="mb-4 px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded-lg text-sm font-semibold transition">
+                Toggle AI Tuning Panel
+            </button>
+            
+            <button id="manual-distraction" class="mb-4 px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-sm font-semibold transition">
+                Trigger Manual Distraction
+            </button>
+
+            <!-- this is the big red button that actually makes the punishment happen -->
+            <button id="arm-device" class="mb-4 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-semibold transition">
+                ARM WARDEN
+            </button>
+        </div>
+
+        <!-- all the tuning controls live in here, hidden by default -->
+        <div id="settings-panel" class="mb-6 p-4 bg-gray-700 rounded-lg border border-gray-600 text-left hidden">
+            <h2 class="text-xl font-bold mb-4 text-red-300">Unintended Use: The Punishment Tuner</h2>
+            <p class="text-sm text-gray-400 mb-4">Watch the live values on the video feed and tune these to match your sensitivity.</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <!-- threshold for detecting smiles (higher = less sensitive) -->
+                <div>
+                    <label for="smile-threshold" class="text-xs font-semibold uppercase text-pink-300 mb-1">Smile Ratio</label>
+                    <input type="number" step="0.01" id="smile-threshold" class="p-2 rounded-lg bg-gray-800 text-lg font-mono text-center border border-gray-600" 
+                           value="{{ '%.2f' % settings['SMILE_THRESHOLD'] }}">
+                    <p class="text-xs text-gray-500 mt-1">Higher ratio means you're smiling</p>
+                </div>
+                <!-- threshold for phone detection confidence -->
+                <div>
+                    <label for="phone-threshold" class="text-xs font-semibold uppercase text-yellow-300 mb-1">Phone Conf</label>
+                    <input type="number" step="0.01" id="phone-threshold" class="p-2 rounded-lg bg-gray-800 text-lg font-mono text-center border border-gray-600" 
+                           value="{{ '%.2f' % settings['OBJ_CONFIDENCE_THRESHOLD'] }}">
+                    <p class="text-xs text-gray-500 mt-1">How sure AI needs to be it's a phone</p>
+                </div>
+                <!-- threshold for face detection -->
+                <div>
+                    <label for="face-threshold" class="text-xs font-semibold uppercase text-green-300 mb-1">Face Conf</label>
+                    <input type="number" step="0.01" id="face-threshold" class="p-2 rounded-lg bg-gray-800 text-lg font-mono text-center border border-gray-600" 
+                           value="{{ '%.2f' % settings['FACE_CONFIDENCE_THRESHOLD'] }}">
+                    <p class="text-xs text-gray-500 mt-1">Below this means no face detected</p>
+                </div>
+                <!-- how much break time you're allowed per hour -->
+                <div>
+                    <label for="break-ratio-threshold" class="text-xs font-semibold uppercase text-blue-300 mb-1">Break Mins/Hour</label>
+                    <input type="number" step="0.1" id="break-ratio-threshold" class="p-2 rounded-lg bg-gray-800 text-lg font-mono text-center border border-gray-600" 
+                           value="{{ '%.1f' % settings['BREAK_MINS_PER_HOUR'] }}">
+                    <p class="text-xs text-gray-500 mt-1">Minutes of break allowed per study hour</p>
+                </div>
+            </div>
+
+            <!-- buttons to test each piece of hardware individually -->
+            <div class="mt-6 pt-4 border-t border-gray-600">
+                <h2 class="text-xl font-bold mb-4 text-cyan-300">Hardware Tests</h2>
+                <p class="text-sm text-gray-400 mb-4">Make sure everything's working before you arm it.</p>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <button id="test-speaker" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-semibold transition">Test Speaker</button>
+                    <button id="test-vibration" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-semibold transition">Test Vibration</button>
+                    <button id="test-alarm" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-semibold transition">Test Alarm</button>
+                    <button id="test-servo" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 rounded-lg text-sm font-semibold transition">Test Servo</button>
+                </div>
+            </div>
+            
+            <p class="text-center text-yellow-400 font-semibold bg-gray-800 p-2 rounded-lg mt-6">
+                Note: Run with 'sudo venv/bin/python3 app.py' to enable Network & GPIO features!
+            </p>
+
+            <button id="save-settings" class="mt-4 w-full px-4 py-3 bg-red-600 hover:bg-red-700 rounded-lg text-lg font-bold transition">
+                <span id="save-text">SAVE THRESHOLDS</span>
+            </button>
+            <p id="save-status" class="mt-2 text-sm text-center"></p>
+        </div>
+
+        <!-- live video stream with AI detection overlays -->
+        <div class="mb-6 bg-gray-900 rounded-lg overflow-hidden shadow-lg border-2 border-gray-600">
+            <img src="{{ url_for('video_feed') }}" width="1296" height="972" class="w-full h-auto">
+        </div>
+
+        <!-- shows what the AI thinks you're doing right now -->
+        <div class="mb-8">
+            <h2 class="text-lg uppercase text-gray-400 tracking-wider mb-2">Current Status</h2>
+            <div id="status-container" class="flex items-center justify-center text-5xl font-extrabold">
+                <div id="status-dot" class="w-6 h-6 bg-yellow-400 rounded-full mr-4 shadow-lg"></div>
+                <span id="status-text">INITIALIZING</span>
+            </div>
+        </div>
+
+        <!-- these three timers track how you're spending your time -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div class="bg-gray-700 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-green-400 mb-2">Study Time</h3>
+                <div id="study-time" class="text-4xl font-mono">00:00:00</div>
+            </div>
+            <div class="bg-gray-700 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-yellow-400 mb-2">Distraction</h3>
+                <div id="distraction-time" class="text-4xl font-mono">00:00:00</div>
+            </div>
+            <div class="bg-gray-700 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-blue-400 mb-2">Break Time</h3>
+                <div id="break-time" class="text-4xl font-mono">00:00:00</div>
+            </div>
+        </div>
+
+        <!-- important warnings show up here when something needs your attention -->
+        <div id="alert-box" class="hidden bg-red-800 border-2 border-red-600 p-4 rounded-lg text-lg font-semibold">
+            <span id="alert-text">Alert will show here!</span>
+        </div>
+    </div>
+
+    <script>
+        // grabbing references to all the DOM elements we'll need to update
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+        const studyTimeEl = document.getElementById('study-time');
+        const breakTimeEl = document.getElementById('break-time');
+        const distractionTimeEl = document.getElementById('distraction-time');
+        const alertBox = document.getElementById('alert-box');
+        const alertText = document.getElementById('alert-text');
+        const settingsPanel = document.getElementById('settings-panel');
+        const toggleButton = document.getElementById('toggle-settings');
+        const saveButton = document.getElementById('save-settings');
+        const saveStatus = document.getElementById('save-status');
+        const manualDistractionButton = document.getElementById('manual-distraction');
+        const armButton = document.getElementById('arm-device');
+        const smileThresholdEl = document.getElementById('smile-threshold');
+        const phoneThresholdEl = document.getElementById('phone-threshold');
+        const faceThresholdEl = document.getElementById('face-threshold');
+        const breakRatioEl = document.getElementById('break-ratio-threshold');
+
+        toggleButton.addEventListener('click', () => {
+            settingsPanel.classList.toggle('hidden');
+        });
+        
+        manualDistractionButton.addEventListener('click', async () => {
+            manualDistractionButton.disabled = true;
+            manualDistractionButton.textContent = 'Triggering...';
+            try { await fetch('/trigger_distraction', { method: 'POST' }); }
+            catch (error) { console.error('Failed to trigger distraction:', error); }
+            finally { setTimeout(() => { manualDistractionButton.disabled = false; manualDistractionButton.textContent = 'Trigger Manual Distraction'; }, 1000); }
+        });
+
+        // when you click the arm button, it tells the server to start actually punishing
+        armButton.addEventListener('click', async () => {
+            if (armButton.classList.contains('btn-armed')) return; // already armed, do nothing
+
+            armButton.disabled = true;
+            armButton.textContent = 'ARMING...';
+            try { 
+                await fetch('/arm_device', { method: 'POST' }); 
+                // success! change the button to show it's armed
+                armButton.textContent = 'DEVICE ARMED';
+                armButton.classList.remove('bg-red-600', 'hover:bg-red-700');
+                armButton.classList.add('btn-armed');
+                
+                // clear all the timers to start fresh
+                studyTimeEl.textContent = '00:00:00';
+                breakTimeEl.textContent = '00:00:00';
+                distractionTimeEl.textContent = '00:00:00';
+                alertBox.classList.add('hidden'); 
+
+            } catch (error) { 
+                console.error('Failed to arm device:', error); 
+                armButton.disabled = false;
+                armButton.textContent = 'ARM WARDEN';
+            }
+            // once armed, button stays disabled so you can't arm it twice
+        });
+
+        saveButton.addEventListener('click', async () => {
+            const newSettings = { 
+                smile: smileThresholdEl.value, 
+                phone: phoneThresholdEl.value, 
+                face: faceThresholdEl.value, 
+                break_ratio: breakRatioEl.value 
+            };
+            saveButton.disabled = true;
+            document.getElementById('save-text').textContent = 'SAVING...';
+            saveStatus.textContent = 'Sending new thresholds to AI...';
+            saveStatus.className = 'mt-2 text-sm text-center text-yellow-400';
+            try {
+                const response = await fetch('/set_thresholds', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify(newSettings) 
+                });
+                if (response.ok) { 
+                    saveStatus.textContent = 'Settings saved successfully!'; 
+                    saveStatus.className = 'mt-2 text-sm text-center text-green-400'; 
+                } else { 
+                    const result = await response.json(); 
+                    saveStatus.textContent = `Error: ${result.message || 'Failed to save settings.'}`; 
+                    saveStatus.className = 'mt-2 text-sm text-center text-red-500'; 
+                }
+            } catch (error) { 
+                saveStatus.textContent = `Network Error: Could not connect to the server.`; 
+                saveStatus.className = 'mt-2 text-sm text-center text-red-500'; 
+            }
+            finally { 
+                saveButton.disabled = false; 
+                document.getElementById('save-text').textContent = 'SAVE THRESHOLDS'; 
+            }
+        });
+        
+        async function testGpio(device, button) {
+            console.log(`Requesting test for hardware device: ${device}`);
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Testing...';
+            try {
+                await fetch('/test_gpio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device: device }) 
+                });
+            } catch (error) {
+                console.error(`Failed to send test for device ${device}:`, error);
+            } finally {
+                setTimeout(() => {
+                    button.disabled = false;
+                    button.textContent = originalText;
+                }, 2000); 
+            }
+        }
+
+        // --- UPDATED Event Listeners for new hardware ---
+        document.getElementById('test-speaker').addEventListener('click', (e) => testGpio('speaker', e.target));
+        document.getElementById('test-vibration').addEventListener('click', (e) => testGpio('vibration', e.target));
+        document.getElementById('test-alarm').addEventListener('click', (e) => testGpio('alarm', e.target));
+        document.getElementById('test-servo').addEventListener('click', (e) => testGpio('servo', e.target));
+
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+
+                statusText.textContent = data.status;
+                const statusClasses = { 
+                    'STUDYING': 'bg-green-400', 
+                    'DISTRACTED': 'bg-yellow-400',
+                    'BREAK': 'bg-blue-400', 
+                    'default': 'bg-gray-500' 
+                };
+                statusDot.className = `w-6 h-6 ${statusClasses[data.status] || statusClasses.default} rounded-full mr-4 shadow-lg animate-pulse-fast`;
+
+                // update all the timers with the latest values from the server
+                if (armButton.textContent !== 'DEVICE ARMED') {
+                    studyTimeEl.textContent = data.studyTime;
+                    breakTimeEl.textContent = data.breakTime;
+                    distractionTimeEl.textContent = data.distractionTime;
+                } else if (data.alert) {
+                    // always show alerts even if not armed
+                } else {
+                    // if armed, keep updating timers
+                    studyTimeEl.textContent = data.studyTime;
+                    breakTimeEl.textContent = data.breakTime;
+                    distractionTimeEl.textContent = data.distractionTime;
+                }
+
+                // show or hide the alert box based on whether there's an alert
+                if (data.alert) { 
+                    alertText.textContent = data.alert; 
+                    alertBox.classList.remove('hidden'); 
+                } else { 
+                    alertBox.classList.add('hidden'); 
+                }
+            } catch (error) {
+                console.error('Failed to fetch status:', error);
+                statusText.textContent = 'DISCONNECTED';
+                statusDot.className = 'w-6 h-6 bg-red-500 rounded-full mr-4 shadow-lg animate-pulse-fast';
+            }
+        }
+
+        // check status every second to keep everything up to date
+        setInterval(updateStatus, 1000);
+        updateStatus();
+    </script>
+</body>
+</html>
+
